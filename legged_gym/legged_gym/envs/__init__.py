@@ -69,3 +69,12 @@ from .a1.a1_remote_config import A1RemoteCfg, A1RemoteCfgPPO
 task_registry.register( "a1_remote", LeggedRobot, A1RemoteCfg(), A1RemoteCfgPPO() )
 from .go1.go1_remote_config import Go1RemoteCfg, Go1RemoteCfgPPO
 task_registry.register( "go1_remote", LeggedRobot, Go1RemoteCfg(), Go1RemoteCfgPPO() )
+
+## mybot_v3 (custom robot)
+from .mybot_v3.mybot_v3_field_config import MybotV3FieldCfg, MybotV3FieldCfgPPO
+from .base.legged_robot_field import LeggedRobotField
+task_registry.register( "mybot_v3_field", LeggedRobotField, MybotV3FieldCfg(), MybotV3FieldCfgPPO())
+from .mybot_v3.mybot_v3_field_distill_config import MybotV3FieldDistillCfg, MybotV3FieldDistillCfgPPO
+task_registry.register( "mybot_v3_distill", LeggedRobotField, MybotV3FieldDistillCfg(), MybotV3FieldDistillCfgPPO())
+from .mybot_v3.mybot_v3_config import MybotV3RoughCfg, MybotV3RoughCfgPPO
+task_registry.register( "mybot_v3_rough", LeggedRobot, MybotV3RoughCfg(), MybotV3RoughCfgPPO())

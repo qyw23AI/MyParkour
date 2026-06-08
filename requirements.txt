@@ -1,0 +1,43 @@
+# ============================================================================
+# MyBotV3 Parkour Learning - Python 运行时依赖
+# ============================================================================
+# torch + torchvision 由 deploy.sh 通过 conda 安装（避免 pip CUDA wheel 问题）
+
+# --- URDF / Mesh / 仿真辅助 ---
+urdfpy==0.0.22
+pysdf==0.1.9
+warp-lang==0.10.1
+pyquaternion
+trimesh==3.23.5
+
+# --- 通用工具 ---
+ninja
+pyyaml
+pexpect
+matplotlib
+tqdm
+packaging
+ipython
+chardet
+numpy==1.23.2
+scipy
+opencv-python
+
+# --- 训练日志与可视化 ---
+tensorboard
+tensorboardX
+wandb
+
+# --- 数据处理 ---
+h5py
+h5py_cache
+einops
+getkey
+
+# --- 模型导出（可选）---
+onnxruntime
+onnx>=1.14.0
+
+# --- Parkour 项目额外依赖（原 himloco 中缺失）---
+tabulate
+debugpy

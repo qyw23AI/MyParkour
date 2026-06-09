@@ -31,7 +31,7 @@ set -euo pipefail
 # ============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="${PROJECT_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+PROJECT_DIR="${PROJECT_DIR:-${SCRIPT_DIR}}"
 CONDA_DIR="${CONDA_DIR:-/opt/conda}"
 CONDA_ENV="${CONDA_ENV:-parkour}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.8.10}"
@@ -103,50 +103,71 @@ install_vnc() {
     
     local VGL_DIR="/opt/VirtualGL"
     local TURBO_DIR="/opt/TurboVNC"
-    local VGL_VER="2.13.1"
-    local TURBO_VER="3.1.3"
+    local VGL_VER="3.1.4"
+    local TURBO_VER="3.3"
     
     mkdir -p /tmp/vnc_inst && cd /tmp/vnc_inst
     
     if [[ ! -d "${VGL_DIR}" ]]; then
-        log_info "下载 VirtualGL ${VGL_VER}..."
+        log_info "安装 VirtualGL ${VGL_VER}..."
         local VGL_TAR="virtualgl_${VGL_VER}_amd64.deb"
-        if download_with_fallback "${VGL_TAR}" \
+        if [[ -s "/tmp/vnc_inst/${VGL_TAR}" ]]; then
+            log_info "发现已下载的 ${VGL_TAR}，跳过下载"
+            sudo dpkg -i "/tmp/vnc_inst/${VGL_TAR}" || sudo apt-get install -f -y
+            log_info "VirtualGL 安装完成"
+        elif download_with_fallback "${VGL_TAR}" \
             "https://github.com/VirtualGL/virtualgl/releases/download/${VGL_VER}/${VGL_TAR}" \
-            "https://ghproxy.com/https://github.com/VirtualGL/virtualgl/releases/download/${VGL_VER}/${VGL_TAR}"; then
+            "https://mirror.ghproxy.com/https://github.com/VirtualGL/virtualgl/releases/download/${VGL_VER}/${VGL_TAR}" \
+            "https://ghp.ci/https://github.com/VirtualGL/virtualgl/releases/download/${VGL_VER}/${VGL_TAR}" \
+            "https://github.moeyy.xyz/https://github.com/VirtualGL/virtualgl/releases/download/${VGL_VER}/${VGL_TAR}"; then
             sudo dpkg -i "${VGL_TAR}" || sudo apt-get install -f -y
             rm -f "${VGL_TAR}"
             log_info "VirtualGL 安装完成"
+        else
+            log_warn "VirtualGL 下载失败，尝试通过 apt 安装..."
+            sudo apt-get install -y virtualgl || log_warn "VirtualGL apt 安装也失败，跳过"
         fi
     else
         log_info "VirtualGL 已安装"
     fi
     
     if [[ ! -d "${TURBO_DIR}" ]]; then
-        log_info "下载 TurboVNC ${TURBO_VER}..."
-        local TURBO_TAR="turbovnc_${TURBO_VER}_amd64.tar.gz"
-        if download_with_fallback "${TURBO_TAR}" \
-            "https://github.com/TurboVNC/turbovnc/releases/download/${TURBO_VER}/${TURBO_TAR}" \
-            "https://ghproxy.com/https://github.com/TurboVNC/turbovnc/releases/download/${TURBO_VER}/${TURBO_TAR}"; then
-            sudo tar -zxvf "${TURBO_TAR}" -C /opt
-            sudo mv /opt/turbovnc_${TURBO_VER}_amd64 "${TURBO_DIR}"
-            rm -f "${TURBO_TAR}"
+        log_info "安装 TurboVNC ${TURBO_VER}..."
+        local TURBO_DEB="turbovnc_${TURBO_VER}_amd64.deb"
+        if [[ -s "/tmp/vnc_inst/${TURBO_DEB}" ]]; then
+            log_info "发现已下载的 ${TURBO_DEB}，跳过下载"
+            sudo dpkg -i "/tmp/vnc_inst/${TURBO_DEB}" || sudo apt-get install -f -y
             log_info "TurboVNC 安装完成"
+        elif download_with_fallback "${TURBO_DEB}" \
+            "https://github.com/TurboVNC/turbovnc/releases/download/${TURBO_VER}/${TURBO_DEB}" \
+            "https://mirror.ghproxy.com/https://github.com/TurboVNC/turbovnc/releases/download/${TURBO_VER}/${TURBO_DEB}" \
+            "https://ghp.ci/https://github.com/TurboVNC/turbovnc/releases/download/${TURBO_VER}/${TURBO_DEB}" \
+            "https://github.moeyy.xyz/https://github.com/TurboVNC/turbovnc/releases/download/${TURBO_VER}/${TURBO_DEB}"; then
+            sudo dpkg -i "${TURBO_DEB}" || sudo apt-get install -f -y
+            rm -f "${TURBO_DEB}"
+            log_info "TurboVNC 安装完成"
+        else
+            log_warn "TurboVNC 下载失败，尝试通过 apt 安装..."
+            sudo apt-get install -y tightvncserver || log_warn "tightvncserver apt 安装也失败，跳过"
         fi
     else
         log_info "TurboVNC 已安装"
     fi
     
+    # 安装 X11 依赖和轻量桌面环境 xfce4（VNC 需要桌面环境才能启动）
     sudo apt-get install -y --no-install-recommends \
         xorg x11vnc xvfb xauth libxtst6 libxcursor1 libxinerama1
-    
+    sudo apt-get install -y --no-install-recommends xfce4 xfce4-goodies
+
     [[ -d "${TURBO_DIR}" ]] && {
         sudo ln -sf "${TURBO_DIR}/bin/vncserver" /usr/local/bin/vncserver
         sudo ln -sf "${TURBO_DIR}/bin/vncstop" /usr/local/bin/vncstop
         sudo ln -sf "${TURBO_DIR}/bin/x0vncserver" /usr/local/bin/x0vncserver
     }
     
-    cd "${PROJECT_DIR}" && rm -rf /tmp/vnc_inst
+    cd "${PROJECT_DIR}"
+    # 只清理脚本下载的文件，保留用户手动放入的文件
+    rm -f /tmp/vnc_inst/virtualgl_*.deb /tmp/vnc_inst/turbovnc_*.deb /tmp/vnc_inst/turbovnc_*.tar.gz
     log_info "VNC 安装完成"
 }
 
@@ -245,15 +266,27 @@ if [[ "${SKIP_SYSTEM_DEPS}" != "1" ]] && [[ "${HAS_SUDO}" == "1" ]]; then
     # 安装 libpython3.8（Ubuntu 22.04 需要从 Ubuntu 20.04 源补充）
     log_step "----- 补充 libpython3.8（Isaac Gym gym_38.so 依赖）-----"
     if ! ldconfig -p | grep -q libpython3.8; then
-        mkdir -p /tmp/py38_dep
-        cd /tmp/py38_dep
-        download_with_fallback libpython3.8.deb \
-            "http://mirrors.aliyun.com/ubuntu/pool/main/p/python3.8/libpython3.8_3.8.10-0ubuntu1~20.04.9_amd64.deb" \
-            "http://archive.ubuntu.com/ubuntu/pool/main/p/python3.8/libpython3.8_3.8.10-0ubuntu1~20.04.9_amd64.deb"
-        sudo dpkg -i libpython3.8.deb || true
-        sudo apt-get install -f -y || true
-        rm -rf /tmp/py38_dep
-        cd "${PROJECT_DIR}"
+        # 首先尝试通过 apt 安装
+        log_info "尝试通过 apt 安装 libpython3.8..."
+        if sudo apt-get install -y libpython3.8 2>/dev/null; then
+            log_info "libpython3.8 通过 apt 安装成功"
+        else
+            # 如果 apt 失败，尝试下载 .deb 包
+            log_warn "apt 安装失败，尝试手动下载 libpython3.8..."
+            mkdir -p /tmp/py38_dep
+            cd /tmp/py38_dep
+            if download_with_fallback libpython3.8.deb \
+                "http://archive.ubuntu.com/ubuntu/pool/main/p/python3.8/libpython3.8_3.8.10-0ubuntu1~20.04.18_amd64.deb" \
+                "http://mirrors.aliyun.com/ubuntu/pool/main/p/python3.8/libpython3.8_3.8.10-0ubuntu1~20.04.18_amd64.deb" \
+                "http://security.ubuntu.com/ubuntu/pool/main/p/python3.8/libpython3.8_3.8.10-0ubuntu1~20.04.18_amd64.deb"; then
+                sudo dpkg -i libpython3.8.deb || true
+                sudo apt-get install -f -y || true
+            else
+                log_warn "libpython3.8 下载失败，但将继续执行（可能影响 Isaac Gym 运行）"
+            fi
+            rm -rf /tmp/py38_dep
+            cd "${PROJECT_DIR}"
+        fi
         log_info "libpython3.8 安装完成"
     else
         log_info "libpython3.8 已存在，跳过"
@@ -283,20 +316,26 @@ if [[ "${SKIP_CONDA}" != "1" ]]; then
     else
         MINICONDA_INSTALLER="Miniconda3-latest-Linux-x86_64.sh"
         
-        # 根据是否使用国内镜像选择下载源
-        if [[ "${USE_CN_MIRROR}" == "1" ]]; then
-            download_with_fallback /tmp/miniconda.sh \
-                "https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/${MINICONDA_INSTALLER}" \
-                "https://mirrors.ustc.edu.cn/anaconda/miniconda/${MINICONDA_INSTALLER}" \
-                "https://mirrors.bfsu.edu.cn/anaconda/miniconda/${MINICONDA_INSTALLER}" \
-                "https://repo.anaconda.com/miniconda/${MINICONDA_INSTALLER}"
+        if [[ -s "/tmp/miniconda.sh" ]]; then
+            log_info "发现已下载的 Miniconda 安装包，跳过下载"
         else
-            download_with_fallback /tmp/miniconda.sh \
-                "https://repo.anaconda.com/miniconda/${MINICONDA_INSTALLER}"
+            # 根据是否使用国内镜像选择下载源
+            if [[ "${USE_CN_MIRROR}" == "1" ]]; then
+                download_with_fallback /tmp/miniconda.sh \
+                    "https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/${MINICONDA_INSTALLER}" \
+                    "https://mirrors.ustc.edu.cn/anaconda/miniconda/${MINICONDA_INSTALLER}" \
+                    "https://mirrors.bfsu.edu.cn/anaconda/miniconda/${MINICONDA_INSTALLER}" \
+                    "https://repo.anaconda.com/miniconda/${MINICONDA_INSTALLER}"
+            else
+                download_with_fallback /tmp/miniconda.sh \
+                    "https://repo.anaconda.com/miniconda/${MINICONDA_INSTALLER}"
+            fi
         fi
         
         chmod +x /tmp/miniconda.sh
-        bash /tmp/miniconda.sh -b -p "${CONDA_DIR}"
+        sudo bash /tmp/miniconda.sh -b -p "${CONDA_DIR}"
+        # 修复权限，让普通用户也能读写
+        sudo chown -R "${USER}:${USER}" "${CONDA_DIR}"
         rm -f /tmp/miniconda.sh
         log_info "Miniconda 安装完成: ${CONDA_DIR}"
     fi
@@ -305,16 +344,15 @@ if [[ "${SKIP_CONDA}" != "1" ]]; then
     if [[ "${USE_CN_MIRROR}" == "1" ]]; then
         log_info "配置 conda 国内镜像源（清华）"
         "${CONDA_DIR}/bin/conda" config --set show_channel_urls yes
-        "${CONDA_DIR}/bin/conda" config --set default_channels \
-            https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main \
-            https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/r \
-            https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/msys2
+        "${CONDA_DIR}/bin/conda" config --remove-key default_channels 2>/dev/null || true
+        "${CONDA_DIR}/bin/conda" config --append channels "https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main"
+        "${CONDA_DIR}/bin/conda" config --append channels "https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/r"
+        "${CONDA_DIR}/bin/conda" config --append channels "https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/msys2"
         "${CONDA_DIR}/bin/conda" config --set custom_channels.conda-forge \
-            https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud
-        "${CONDA_DIR}/bin/conda" config --set custom_channels.pytorch \
-            https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud
-        "${CONDA_DIR}/bin/conda" config --set custom_channels.nvidia \
-            https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud
+            "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud"
+        # nvidia channel 使用官方源（清华镜像的 nvidia channel 经常不可用）
+        # "${CONDA_DIR}/bin/conda" config --set custom_channels.nvidia \
+        #     "https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud"
     fi
 
     # 同意 conda tos
@@ -333,21 +371,14 @@ if [[ "${SKIP_CONDA}" != "1" ]]; then
         log_info "conda 环境创建完成"
     fi
 
-    # 安装 PyTorch（通过 conda 安装以避免 pip 解析 CUDA wheel 时受网络波动影响）
+    # 安装 PyTorch（通过 pip 安装 CUDA 版本以确保正确的 CUDA 支持）
     log_info "安装 PyTorch ${TORCH_VERSION}+cu${CUDA_VERSION}"
-    if [[ "${USE_CN_MIRROR}" == "1" ]]; then
-        "${CONDA_DIR}/bin/conda" install -y -n "${CONDA_ENV}" \
-            -c pytorch -c nvidia \
-            "pytorch==${TORCH_VERSION}" \
-            "torchvision==${TORCHVISION_VERSION}" \
-            "pytorch-cuda=${CUDA_VERSION}"
-    else
-        "${CONDA_DIR}/bin/conda" install -y -n "${CONDA_ENV}" \
-            -c pytorch -c nvidia \
-            "pytorch==${TORCH_VERSION}" \
-            "torchvision==${TORCHVISION_VERSION}" \
-            "pytorch-cuda=${CUDA_VERSION}"
-    fi
+    "${CONDA_DIR}/envs/${CONDA_ENV}/bin/pip" install \
+        --retries 20 --default-timeout 120 \
+        "torch==${TORCH_VERSION}" \
+        "torchvision==${TORCHVISION_VERSION}" \
+        "torchaudio==${TORCH_VERSION}" \
+        --index-url "https://download.pytorch.org/whl/cu${CUDA_VERSION/./}"
     "${CONDA_DIR}/bin/conda" clean -afy
     
     log_info "PyTorch 安装完成"
@@ -616,7 +647,7 @@ export DISPLAY="\${DISPLAY:-:1}"
 # VirtualGL 和 TurboVNC 路径
 export VGL_HOME="/opt/VirtualGL"
 export TURBOVNC_HOME="/opt/TurboVNC"
-export PATH="${TURBOVNC_HOME}/bin:${VGL_HOME}/bin:${PATH}"
+export PATH="\${TURBOVNC_HOME}/bin:\${VGL_HOME}/bin:\${PATH}"
 export VGL_GLFLUSH=1
 export VGL_VSYNC=1
 

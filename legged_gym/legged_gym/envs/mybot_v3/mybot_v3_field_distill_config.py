@@ -9,7 +9,7 @@ from legged_gym.utils.helpers import merge_dict
 
 class MybotV3FieldDistillCfg( MybotV3FieldCfg ):
     class env( MybotV3FieldCfg.env ):
-        num_envs = 2048
+        num_envs = 4096
         obs_components = [
             "proprioception",
             "height_measurements",
@@ -29,8 +29,8 @@ class MybotV3FieldDistillCfg( MybotV3FieldCfg ):
         pos = [0.0, 0.0, 0.40]
 
     class terrain( MybotV3FieldCfg.terrain ):
-        num_rows = 2
-        num_cols = 1
+        num_rows = 8
+        num_cols = 4
         max_init_terrain_level = 1
         curriculum = False
 
@@ -105,10 +105,8 @@ class MybotV3FieldDistillCfg( MybotV3FieldCfg ):
             "roll",
             "pitch",
             "out_of_track",
-            "z_low",
-            "z_high",
         ]
-        roll_kwargs = merge_dict(MybotV3FieldCfg.termination.roll_kwargs, dict(
+        roll_kwargs = dict(
             threshold= 0.8,
             crawl_threshold= 0.4,
             stairsup_threshold= 0.8,
@@ -116,31 +114,15 @@ class MybotV3FieldDistillCfg( MybotV3FieldCfg ):
             jump_threshold= 0.8,
             tilt_threshold= 1.0,
             walk_threshold= 0.8,
-        ))
-        pitch_kwargs = merge_dict(MybotV3FieldCfg.termination.pitch_kwargs, dict(
+        )
+        pitch_kwargs = dict(
             threshold= 1.6,
             jump_threshold= 1.6,
             leap_threshold= 1.6,
             tilt_threshold= 1.6,
             walk_threshold= 1.6,
             stairsup_threshold= 1.6,
-        ))
-        z_low_kwargs = merge_dict(MybotV3FieldCfg.termination.z_low_kwargs, dict(
-            threshold= 0.15,
-            leap_threshold= 0.15,
-            tilt_threshold= 0.15,
-            walk_threshold= 0.15,
-            stairsup_threshold= 0.15,
-            jump_threshold= 0.15,
-        ))
-        z_high_kwargs = merge_dict(MybotV3FieldCfg.termination.z_high_kwargs, dict(
-            threshold= 1.5,
-            leap_threshold= 1.5,
-            tilt_threshold= 1.5,
-            walk_threshold= 1.5,
-            stairsup_threshold= 1.5,
-            jump_threshold= 1.5,
-        ))
+        )
 
         check_obstacle_conditioned_threshold = True
         timeout_at_border = True
@@ -153,7 +135,7 @@ class MybotV3FieldDistillCfg( MybotV3FieldCfg ):
             tracking_ang_vel = 0.0
             tracking_lin_vel = 1.0
             world_vel_l2norm = -1.0
-            legs_energy_substeps = -2e-5
+            energy_substeps = -2e-5
             alive = 2.0
             exceed_dof_pos_limits = -1e-1
             exceed_torque_limits_i = -1e-1
@@ -212,7 +194,7 @@ class MybotV3FieldDistillCfgPPO( MybotV3FieldCfgPPO ):
         resume = False
         load_run = None
         max_iterations = 80000
-        save_interval = 1000
+        save_interval = 2000
 
     class policy( MybotV3FieldCfgPPO.policy ):
         init_noise_std = 0.5
@@ -225,7 +207,7 @@ class MybotV3FieldDistillCfgPPO( MybotV3FieldCfgPPO ):
         learning_rate = 1.e-4
         value_loss_coef = 0.0
         num_learning_epochs = 1
-        num_mini_batches = 2
+        num_mini_batches = 4
         teacher_act_prob = "exp"
         distillation_loss_coef = 1.0
         distill_target = "tanh"

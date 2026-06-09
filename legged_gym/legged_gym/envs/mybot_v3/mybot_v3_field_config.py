@@ -16,14 +16,14 @@ class MybotV3FieldCfg( MybotV3RoughCfg ):
 
     class terrain( MybotV3RoughCfg.terrain ):
         mesh_type = None
-        num_rows = 20
-        num_cols = 50
+        num_rows = 16
+        num_cols = 20
         selected = "BarrierTrack"
         max_init_terrain_level = 0
         border_size = 5
         slope_treshold = 20.
 
-        curriculum = False
+        curriculum = True
         horizontal_scale = 0.025
         pad_unavailable_info = True
 
@@ -38,30 +38,30 @@ class MybotV3FieldCfg( MybotV3RoughCfg ):
                 "stairsup",
                 "tilt",
             ],
-            n_obstacles_per_track= 5,
+            n_obstacles_per_track= 2,
             randomize_obstacle_order= True,
-            track_width= 1.6,
-            track_block_length= 2.,
+            track_width= 2.4,
+            track_block_length= 2.4,
             wall_thickness= (0.04, 0.2),
             wall_height= -0.05,
             jump= dict(
-                height= (0.25, 0.35),
-                depth= (0.05, 0.15),
+                height= (0.15, 0.3),
+                depth= (0.05, 0.1),
                 fake_offset= 0.0,
             ),
             leap= dict(
-                length= (0.2, 0.5),
-                depth= (0.4, 0.6),
-                height= 0.2,
+                length= (0.1, 0.3),
+                depth= (0.2, 0.4),
+                height= 0.1,
             ),
             stairsup= dict(
-                height= (0.08, 0.15),
-                depth= (0.1, 0.3),
+                height= (0.06, 0.1),
+                depth= (0.15, 0.25),
                 n_stairs= 3,
             ),
             tilt= dict(
-                width= (0.15, 0.35),
-                depth= (0.8, 1.5),
+                width= (0.2, 0.4),
+                depth= (0.8, 1.2),
                 opening_angle= 0.0,
                 wall_height= 0.5,
             ),
@@ -84,6 +84,7 @@ class MybotV3FieldCfg( MybotV3RoughCfg ):
     class commands( MybotV3RoughCfg.commands ):
         heading_command = False
         resampling_time = 10
+        lin_cmd_cutoff = 0.2
         class ranges( MybotV3RoughCfg.commands.ranges ):
             lin_vel_x = [-1.0, 1.0]
             lin_vel_y = [0.0, 0.0]
@@ -107,28 +108,17 @@ class MybotV3FieldCfg( MybotV3RoughCfg ):
         termination_terms = [
             "roll",
             "pitch",
-            "z_low",
-            "z_high",
         ]
 
         roll_kwargs = dict(
-            threshold= 0.8,
+            threshold= 1.4,
         )
         pitch_kwargs = dict(
             threshold= 1.6,
         )
-        z_low_kwargs = dict(
-            threshold= 0.10,
-        )
-        z_high_kwargs = dict(
-            threshold= 1.5,
-        )
-        out_of_track_kwargs = dict(
-            threshold= 1.,
-        )
 
         check_obstacle_conditioned_threshold = True
-        timeout_at_border = False
+        timeout_at_border = True
 
     class domain_rand( MybotV3RoughCfg.domain_rand ):
         randomize_com = True
@@ -138,7 +128,7 @@ class MybotV3FieldCfg( MybotV3RoughCfg ):
             z = [-0.05, 0.05]
 
         randomize_motor = True
-        leg_motor_strength_range = [0.9, 1.1]
+        leg_motor_strength_range = [0.8, 1.2]
 
         randomize_base_mass = True
         added_mass_range = [1.0, 3.0]
@@ -151,26 +141,39 @@ class MybotV3FieldCfg( MybotV3RoughCfg ):
             y= [-0.25, 0.25],
         )
 
-        push_robots = False
+        push_robots = True
+        max_push_vel_xy = 0.5
+        push_interval_s = 2
 
     class rewards( MybotV3RoughCfg.rewards ):
         class scales( MybotV3RoughCfg.rewards.scales ):
-            tracking_ang_vel = 0.05
+            tracking_lin_vel = 1.0
+            tracking_ang_vel = 1.0
             world_vel_l2norm = -1.
-            legs_energy_substeps = -2e-5
-            alive = 2.
-            exceed_dof_pos_limits = -1e-1
-            exceed_torque_limits_i = -1e-1
-            collision = -10.0
+            energy_substeps = -2e-7
+            alive = 0.5
+            dof_error = -0.005
+            lazy_stop = -3.0
+            exceed_dof_pos_limits = -0.1
+            exceed_torque_limits_l1norm = -0.1
+            collision = -0.05
+            penetrate_depth = -0.05
 
         soft_dof_pos_limit = 1.0
         base_height_target = 0.33
 
+    class curriculum:
+        penetrate_depth_threshold_harder = 100
+        penetrate_depth_threshold_easier = 200
+        no_moveup_when_fall = True
+
 
 class MybotV3FieldCfgPPO( MybotV3RoughCfgPPO ):
     class algorithm( MybotV3RoughCfgPPO.algorithm ):
-        entropy_coef = 0.01
+        entropy_coef = 0.0
         clip_min_std = 1e-12
+        num_mini_batches = 4
+        learning_rate = 1e-3
 
     class policy( MybotV3RoughCfgPPO.policy ):
         rnn_type = 'gru'
@@ -179,7 +182,9 @@ class MybotV3FieldCfgPPO( MybotV3RoughCfgPPO ):
     class runner( MybotV3RoughCfgPPO.runner ):
         policy_class_name = "ActorCriticRecurrent"
         experiment_name = "field_mybot_v3"
+        num_steps_per_env = 24
         resume = False
         run_name = "JLC_obstacles"
-        max_iterations = 5000
-        save_interval = 500
+        max_iterations = 20000
+        save_interval = 1000
+        log_interval = 100

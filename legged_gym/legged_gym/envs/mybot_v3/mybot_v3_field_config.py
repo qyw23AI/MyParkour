@@ -48,6 +48,7 @@ class MybotV3FieldCfg( MybotV3RoughCfg ):
             hurdle= dict(
                 height= (0.15, 0.35),
                 depth= (0.05, 0.08),
+                x_offset= 1.0,  # place hurdle 1m into block (not at entrance)
             ),
             stairsup= dict(
                 height= (0.08, 0.15),
@@ -101,7 +102,7 @@ class MybotV3FieldCfg( MybotV3RoughCfg ):
         resampling_time = 10
         lin_cmd_cutoff = 0.2
         class ranges( MybotV3RoughCfg.commands.ranges ):
-            lin_vel_x = [-1.0, 1.0]
+            lin_vel_x = [-0.2, 0.2]
             lin_vel_y = [0.0, 0.0]
             ang_vel_yaw = [0., 0.]
 
@@ -197,9 +198,13 @@ class MybotV3FieldCfgPPO( MybotV3RoughCfgPPO ):
     class runner( MybotV3RoughCfgPPO.runner ):
         policy_class_name = "ActorCriticRecurrent"
         experiment_name = "field_mybot_v3"
-        num_steps_per_env = 24
-        resume = False
+        num_steps_per_env = 100
+        resume = False                  # rough 训练完成后改为 True
+        # 用绝对路径跨实验加载 rough 权重，例如：
+        # load_run = "/home/ubuntu/MyParkour/logs/rough_mybot_v3/Jun10_12-00_"
+        load_run = None
+        checkpoint = -1                 # -1 = 加载最新 checkpoint
         run_name = "JLC_obstacles"
         max_iterations = 20000
         save_interval = 1000
-        log_interval = 100
+        log_interval = 10

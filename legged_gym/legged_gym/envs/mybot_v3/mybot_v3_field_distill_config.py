@@ -51,6 +51,7 @@ class MybotV3FieldDistillCfg( MybotV3FieldCfg ):
             hurdle= dict(
                 height= (0.15, 0.35),
                 depth= (0.05, 0.08),
+                x_offset= 1.0,  # place hurdle 1m into block (not at entrance)
             ),
             stairsup= dict(
                 height= (0.08, 0.15),
@@ -233,14 +234,14 @@ class MybotV3FieldDistillCfgPPO( MybotV3FieldCfgPPO ):
         teacher_policy_class_name = "ActorCriticRecurrent"
         teacher_ac_path = None
         class teacher_policy( MybotV3FieldCfgPPO.policy ):
-            num_actor_obs = 276
-            num_critic_obs = 276
+            num_actor_obs = 277  # +1 for block_info_dim 2→3 (x_start offset field)
+            num_critic_obs = 277
             num_actions = 12
             obs_segments = OrderedDict(
                 proprioception= (48,),
                 base_pose= (6,),
                 robot_config= (1 + 3 + 1 + 12,),
-                engaging_block= (1 + 200 + 2,),
+                engaging_block= (1 + 200 + 3,),  # block_info_dim=3
                 sidewall_distance= (2,),
             )
             env_action_scale = MybotV3FieldCfg.control.action_scale

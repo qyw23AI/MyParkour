@@ -563,7 +563,7 @@ class LeggedRobotFieldMixin:
         pitch[pitch > pi] -= pi * 2 # to range (-pi, pi)
         pitch[pitch < -pi] += pi * 2 # to range (-pi, pi)
         engaging_mask = (engaging_obstacle_types == self.terrain.track_options_id_dict["down"]) \
-            & (engaging_obstacle_info[:, -1] < 0.)
+            & (engaging_obstacle_info[:, 1] < 0.)  # index 1 = critical_param (height, negative for down)
         pitch_err = torch.abs(pitch - 0.2)
         return torch.exp(-pitch_err/self.cfg.rewards.tracking_sigma) * engaging_mask # the higher positive factor, the more you want the robot to pitch down 0.2 rad
 

@@ -64,7 +64,7 @@ PARKOUR_OBSTACLES = ["hurdle", "stairsup", "bridge_a", "bridge_b", "t_stairs"]
 # 障碍物默认参数（与 distill config 的目标参数对齐）
 DEFAULT_OBSTACLE_PARAMS = {
     "jump":    dict(height=(0.25, 0.35), depth=(0.05, 0.15), fake_offset=0.0),
-    "hurdle":  dict(height=(0.15, 0.35), depth=(0.05, 0.08)),   # 30cm木板, 3-5cm厚
+    "hurdle":  dict(height=(0.15, 0.35), depth=(0.05, 0.08), x_offset=1.0),   # 30cm木板, 3-5cm厚, 置于block中间1m处
     "tilt":    dict(width=(0.15, 0.35), depth=(0.8, 1.5), opening_angle=0.0, wall_height=0.5),
     "crawl":   dict(height=(0.25, 0.35), depth=(0.04, 0.08), wall_height=0.8),
     "down":    dict(height=(0.1, 0.25), depth=(0.1, 0.3)),

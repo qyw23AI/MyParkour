@@ -107,8 +107,10 @@ class LeggedRobot(BaseTask):
         # return clipped obs, clipped states (None), rewards, dones and infos
         clip_obs = self.cfg.normalization.clip_observations
         self.obs_buf = torch.clip(self.obs_buf, -clip_obs, clip_obs)
+        torch.nan_to_num_(self.obs_buf)  # torch.clip does not remove NaN; guard against physics explosion
         if self.privileged_obs_buf is not None:
             self.privileged_obs_buf = torch.clip(self.privileged_obs_buf, -clip_obs, clip_obs)
+            torch.nan_to_num_(self.privileged_obs_buf)
         return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
 
     def pre_physics_step(self, actions):
@@ -861,9 +863,14 @@ class LeggedRobot(BaseTask):
     def _get_terrain_curriculum_move(self, env_ids):
         distance = torch.norm(self.root_states[env_ids, :2] - self.env_origins[env_ids, :2], dim=1)
         # robots that walked far enough progress to harder terains
-        move_up = distance > self.terrain.env_length / 2
-        # robots that walked less than half of their required distance go to simpler terrains
-        move_down = (distance < torch.norm(self.commands[env_ids, :2], dim=1)*self.max_episode_length_s*0.5) * ~move_up
+        if hasattr(self, 'terrain'):
+            move_up = distance > self.terrain.env_length / 2
+            # robots that walked less than half of their required distance go to simpler terrains
+            move_down = (distance < torch.norm(self.commands[env_ids, :2], dim=1)*self.max_episode_length_s*0.5) * ~move_up
+        else:
+            # When there is no terrain object (ground plane only), no curriculum moves
+            move_up = torch.zeros_like(distance, dtype=torch.bool, device=self.device)
+            move_down = torch.zeros_like(distance, dtype=torch.bool, device=self.device)
         return move_up, move_down
     
     def update_command_curriculum(self, env_ids):

@@ -70,7 +70,7 @@ def split_and_pad_trajectories(tensor, dones):
     #     trajectory_masks = trajectory_masks[:padded_trajectories.shape[0]]
         padded_trajectories = torch.cat([
             padded_trajectories,
-            torch.empty((tensor.shape[0] - padded_trajectories.shape[0], *padded_trajectories.shape[1:]), device= tensor.device),
+            torch.zeros((tensor.shape[0] - padded_trajectories.shape[0], *padded_trajectories.shape[1:]), device= tensor.device),
         ], dim= 0)
     return padded_trajectories, trajectory_masks
 

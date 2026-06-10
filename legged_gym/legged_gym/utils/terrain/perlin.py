@@ -17,7 +17,20 @@ class TerrainPerlin:
         self.tot_rows = int(self.xSize / cfg.horizontal_scale)
         self.tot_cols = int(self.ySize / cfg.horizontal_scale)
         assert(self.xSize == cfg.horizontal_scale * self.tot_rows and self.ySize == cfg.horizontal_scale * self.tot_cols)
-        self.heightsamples_float = self.generate_fractal_noise_2d(self.xSize, self.ySize, self.tot_rows, self.tot_cols, **cfg.TerrainPerlin_kwargs)
+        kwargs = dict(cfg.TerrainPerlin_kwargs)
+        zScale = kwargs.pop("zScale", 0.07)
+        if isinstance(zScale, (list, tuple)):
+            # 为每行随机采样 zScale，实现平地与粗糙地形混合
+            zScale_min, zScale_max = float(zScale[0]), float(zScale[1])
+            rows_per_env = self.tot_rows // cfg.num_rows
+            base_noise = self.generate_fractal_noise_2d(self.xSize, self.ySize, self.tot_rows, self.tot_cols, zScale=1.0, **kwargs)
+            scale_map = np.ones(self.tot_rows)
+            for row in range(cfg.num_rows):
+                s = np.random.uniform(zScale_min, zScale_max)
+                scale_map[row * rows_per_env: (row + 1) * rows_per_env] = s
+            self.heightsamples_float = base_noise * scale_map[:, np.newaxis]
+        else:
+            self.heightsamples_float = self.generate_fractal_noise_2d(self.xSize, self.ySize, self.tot_rows, self.tot_cols, zScale=float(zScale), **kwargs)
         # self.heightsamples_float[self.tot_cols//2 - 100:, :] += 100000
         # self.heightsamples_float[self.tot_cols//2 - 40: self.tot_cols//2 + 40, :] = np.mean(self.heightsamples_float)
         self.heightsamples = (self.heightsamples_float * (1 / cfg.vertical_scale)).astype(np.int16)

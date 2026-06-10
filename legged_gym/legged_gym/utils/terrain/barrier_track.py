@@ -159,7 +159,7 @@ class BarrierTrack:
             no_perlin_threshold= 0.02, # If the perlin noise is too small, clip it to zero.
             walk_in_skill_gap= False, # If True, obstacle ID will be walk when the distance to the obstacle does not reach engaging_next_threshold
         )
-    block_info_dim = 2 # size along x-axis, obstacle_critical_params (constant after initialization)
+    block_info_dim = 3 # [x_end, critical_param, x_start]  x_start=0 for all obstacles except hurdle
     max_track_options = 200 # make track options at most 200 types, which means max track id is 199
     track_options_id_dict = {
         "tilt": 1,
@@ -306,8 +306,9 @@ class BarrierTrack:
         )
         track_heightfield = track_heighfield_template
         block_info = torch.tensor([
-            0., # obstacle depth (along x-axis)
+            0., # x_end (obstacle depth along x-axis)
             0., # critical parameter for each obstacle
+            0., # x_start offset (0 = block entrance)
         ], dtype= torch.float32, device= self.device)
         height_offset_px = 0
         return track_trimesh, track_heightfield, block_info, height_offset_px
@@ -379,6 +380,7 @@ class BarrierTrack:
         block_info = torch.tensor([
             jump_depth,
             jump_height_,
+            0.,
         ], dtype= torch.float32, device= self.device)
         height_offset_px = height_value if not virtual else min(height_value, 0)
         return track_trimesh, track_heightfield, block_info, height_offset_px
@@ -450,6 +452,7 @@ class BarrierTrack:
         block_info = torch.tensor([
             tilt_depth,
             tilt_width,
+            0.,
         ], dtype= torch.float32, device= self.device)
         height_offset_px = 0
         return track_trimesh, track_heightfield, block_info, height_offset_px
@@ -519,6 +522,7 @@ class BarrierTrack:
         block_info = torch.tensor([
             crawl_depth if self.track_kwargs["crawl"].get("fake_depth", 0.) <= 0 else self.track_kwargs["crawl"]["fake_depth"],
             crawl_height,
+            0.,
         ], dtype= torch.float32, device= self.device)
         height_offset_px = 0
         return track_trimesh, heightfield_template, block_info, height_offset_px
@@ -567,6 +571,7 @@ class BarrierTrack:
         block_info = torch.tensor([
             leap_length + self.track_kwargs["leap"].get("fake_offset", 0.), # along x(forward)-axis
             leap_depth, # along z(downward)-axis
+            0.,
         ], dtype= torch.float32, device= self.device)
         height_offset_px = 0
         return track_trimesh, track_heightfield, block_info, height_offset_px
@@ -579,7 +584,10 @@ class BarrierTrack:
             heightfield_noise= None,
             virtual= False,
         ):
-        """ Use almost the same coding principle as get_jump_track """
+        """ Use almost the same coding principle as get_jump_track.
+        Supports x_offset to place the hurdle in the middle of the block for better
+        approach space and visibility. block_info = [x_end, height, x_start].
+        """
         if isinstance(self.track_kwargs["hurdle"]["depth"], (tuple, list)):
             hurdle_depth = np.random.uniform(*self.track_kwargs["hurdle"]["depth"])
         else:
@@ -591,24 +599,35 @@ class BarrierTrack:
                 hurdle_height = (1-difficulty) * self.track_kwargs["hurdle"]["height"][0] + difficulty * self.track_kwargs["hurdle"]["height"][1]
         else:
             hurdle_height = self.track_kwargs["hurdle"]["height"]
-        depth_px = int(hurdle_depth / self.cfg.horizontal_scale)
+        # x_offset: distance from block start to hurdle front face (default 0 = block entrance)
+        x_offset_cfg = self.track_kwargs["hurdle"].get("x_offset", 0.)
+        if isinstance(x_offset_cfg, (tuple, list)):
+            x_offset = np.random.uniform(*x_offset_cfg)
+        else:
+            x_offset = float(x_offset_cfg)
+        depth_px = max(1, int(hurdle_depth / self.cfg.horizontal_scale))
+        x_offset_px = int(x_offset / self.cfg.horizontal_scale)
+        # Clamp so hurdle fits within block
+        max_start_px = self.track_block_resolution[0] - depth_px - 1
+        x_offset_px = min(x_offset_px, max_start_px)
         height_value = hurdle_height / self.cfg.vertical_scale
         wall_thickness_px = int(wall_thickness / self.cfg.horizontal_scale) + 1
 
         if self.track_kwargs["hurdle"].get("curved_top_rate", 0.) > 0. and np.random.uniform() < self.track_kwargs["hurdle"]["curved_top_rate"]:
-            # add curved top plane as the hurdle
             height_value = np.ones(depth_px, dtype= np.float32) * height_value
             height_value = height_value * (1 - np.square(np.linspace(-1, 1, depth_px)) * 0.5)
             height_value = height_value.reshape(-1, 1)
-        
+
         if not heightfield_noise is None:
             track_heightfield = heightfield_template + heightfield_noise
         else:
             track_heightfield = heightfield_template.copy()
+        row_start = x_offset_px
+        row_end   = x_offset_px + depth_px
         if not virtual:
             track_heightfield[
-                1:depth_px+1,
-                wall_thickness_px: -wall_thickness_px,
+                row_start : row_end,
+                wall_thickness_px : -wall_thickness_px,
             ] += height_value
         track_trimesh = convert_heightfield_to_trimesh(
             self.fill_heightfield_to_scale(track_heightfield),
@@ -618,14 +637,16 @@ class BarrierTrack:
         )
         if virtual:
             track_heightfield[
-                1:depth_px+1,
-                wall_thickness_px: -wall_thickness_px,
+                row_start : row_end,
+                wall_thickness_px : -wall_thickness_px,
             ] += height_value
         # In non virtual mode, fake_offset only affects penetration computation.
         hurdle_height_ = hurdle_height + self.track_kwargs["hurdle"].get("fake_offset", 0.)
+        x_end = x_offset + hurdle_depth  # used by engaging_next logic
         block_info = torch.tensor([
-            hurdle_depth,
-            hurdle_height_,
+            x_end,         # block_info[0]: obstacle end x (engaging logic uses this)
+            hurdle_height_, # block_info[1]: critical param (height)
+            x_offset,      # block_info[2]: obstacle start x (penetration detection)
         ], dtype= torch.float32, device= self.device)
         height_offset_px = 0.
         return track_trimesh, track_heightfield, block_info, height_offset_px
@@ -896,6 +917,7 @@ class BarrierTrack:
         block_info = torch.tensor([
             bridge_length,
             bridge_height,
+            0.,
         ], dtype= torch.float32, device= self.device)
         height_offset_px = 0
         return track_trimesh, track_heightfield, block_info, height_offset_px
@@ -936,6 +958,7 @@ class BarrierTrack:
         block_info = torch.tensor([
             bridge_length,
             bridge_height,
+            0.,
         ], dtype= torch.float32, device= self.device)
         height_offset_px = 0
         return track_trimesh, track_heightfield, block_info, height_offset_px
@@ -1105,6 +1128,7 @@ class BarrierTrack:
         block_info = torch.tensor([
             step_depth,
             step_height,
+            0.,
         ], dtype= torch.float32, device= self.device)
         height_offset_px = 0  # starts and ends at ground level
         return track_trimesh, track_heightfield, block_info, height_offset_px
@@ -1159,6 +1183,7 @@ class BarrierTrack:
         block_info = torch.tensor([
             down_depth,
             down_height,
+            0.,
         ], dtype= torch.float32, device= self.device)
         height_offset_px = height_value
         return track_trimesh, track_heightfield, block_info, height_offset_px
@@ -1258,10 +1283,11 @@ class BarrierTrack:
             self.cfg.vertical_scale,
             self.cfg.slope_treshold,
         )
-        # NOTE: block_info with only 2 scalar values is not enough to describe the tilted_ramp track
+        # NOTE: block_info with only 3 scalar values is not enough to describe the tilted_ramp track
         block_info = torch.tensor([
             length,
             tilt_angle,
+            0.,
         ], dtype= torch.float32, device= self.device)
         height_offset_px = 0
         return track_trimesh, track_heightfield, block_info, height_offset_px
@@ -1345,6 +1371,7 @@ class BarrierTrack:
         block_info = torch.tensor([
             length,
             slope_angle,
+            0.,
         ], dtype= torch.float32, device= self.device)
         return track_trimesh, track_heightfield, block_info, height_offset_px
     
@@ -1418,6 +1445,7 @@ class BarrierTrack:
         block_info = torch.tensor([
             length,
             height,
+            0.,
         ], dtype= torch.float32, device= self.device)
         height_offset_px = n_steps * height_px
         return track_trimesh, track_heightfield, block_info, height_offset_px
@@ -1489,6 +1517,7 @@ class BarrierTrack:
         block_info = torch.tensor([
             0, # should representing obstacle length
             max_height,
+            0.,
         ], dtype= torch.float32, device= self.device)
         height_offset_px = 0
         return track_trimesh, track_heightfield, block_info, height_offset_px
@@ -1565,6 +1594,7 @@ class BarrierTrack:
         block_info = torch.tensor([
             0, # should representing obstacle length
             amplitude,
+            0.,
         ], dtype= torch.float32, device= self.device)
         height_offset_px = 0
         return track_trimesh, track_heightfield, block_info, height_offset_px
@@ -1631,10 +1661,14 @@ class BarrierTrack:
                 self.track_terrain_type_names = [None for _ in range(self.cfg.num_cols)]
             self.track_terrain_type_names[col_idx] = self.track_kwargs["options"][obstacle_order[0]]
         elif self.track_kwargs["randomize_obstacle_order"] and len(self.track_kwargs["options"]) > 0:
+            n_pick = self.track_kwargs.get("n_obstacles_per_track", len(self.track_kwargs["options"]))
+            n_options = len(self.track_kwargs["options"])
+            # replace=False: 同一 track 内每种障碍最多出现一次，保证障碍多样性
+            # 当 n_pick > n_options 时退化为有放回（无法无重复抽更多）
             obstacle_order = np.random.choice(
-                len(self.track_kwargs["options"]),
-                size= self.track_kwargs.get("n_obstacles_per_track", len(self.track_kwargs["options"])),
-                replace= True,
+                n_options,
+                size= n_pick,
+                replace= n_pick > n_options,
             )
         else:
             obstacle_order = np.arange(len(self.track_kwargs["options"]))
@@ -2076,7 +2110,7 @@ class BarrierTrack:
         - obstacle id (onehot)
         - obstacle info (2,)
         """
-        return (1 + (BarrierTrack.max_track_options + 1) + 2),
+        return (1 + (BarrierTrack.max_track_options + 1) + 3),
 
     def get_sidewall_distance(self, base_positions):
         """ Get the distances toward the sidewall where the track the robot is in """
@@ -2173,11 +2207,22 @@ class BarrierTrack:
             positions_in_block,
             mask_only= False,
         ):
-        return self.get_jump_penetration_depths(
-            block_infos,
-            positions_in_block,
-            mask_only= mask_only,
-        )
+        # block_infos layout: [obstacle_id, x_end, height, x_start]
+        # (track_info_map row: [:,0]=id, [:,1]=x_end, [:,2]=height, [:,3]=x_start)
+        x_end    = block_infos[:, 1]  # x_offset + hurdle_depth
+        height   = block_infos[:, 2]  # hurdle height
+        x_start  = block_infos[:, 3]  # x_offset (0 if no offset configured)
+        # Robot is inside the hurdle zone when x_start <= pos_x <= x_end AND height > 0
+        in_hurdle_x = (positions_in_block[:, 0] >= x_start) & \
+                      (positions_in_block[:, 0] <= x_end) & \
+                      (height > 0.)
+        jump_over = (positions_in_block[:, 2] > height) & (positions_in_block[:, 2] > 0.)
+        penetrated = in_hurdle_x & ~jump_over
+        if mask_only:
+            return penetrated.to(torch.float32)
+        depths = torch.zeros_like(penetrated, dtype= torch.float32)
+        depths[penetrated] = height[penetrated] - positions_in_block[penetrated, 2]
+        return depths
     
     def get_down_penetration_depths(self,
             block_infos,

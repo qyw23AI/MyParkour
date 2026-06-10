@@ -10,9 +10,13 @@ from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobot
 class MybotV3RoughCfg(LeggedRobotCfg):
     class env(LeggedRobotCfg.env):
         num_envs = 4096
+        obs_components = [
+            "proprioception",       # lin_vel + ang_vel + gravity + commands + dof_pos + dof_vel + last_actions
+            "height_measurements",  # terrain heights around the robot
+        ]
 
     class init_state(LeggedRobotCfg.init_state):
-        pos = [0.0, 0.0, 0.40]  # x,y,z [m]
+        pos = [0.0, 0.0, 0.43]          #
         default_joint_angles = {
             "FL_hip_joint": 0.1,
             "RL_hip_joint": 0.1,
@@ -58,6 +62,29 @@ class MybotV3RoughCfg(LeggedRobotCfg):
         decimation = 4
         hip_reduction = 1.0
 
+    class terrain(LeggedRobotCfg.terrain):
+        selected = "TerrainPerlin"  # Perlin 噪声粗糙地形，用于基础行走训练
+        mesh_type = None            # 使用 selected 时必须为 None
+        measure_heights = True
+        horizontal_scale = 0.025
+        vertical_scale = 0.005
+        border_size = 5
+        curriculum = False
+        static_friction = 1.0
+        dynamic_friction = 1.0
+        restitution = 0.0
+        max_init_terrain_level = 5
+        terrain_length = 4.0
+        terrain_width = 4.0
+        num_rows = 20
+        num_cols = 20
+        slope_treshold = 1.0
+
+        TerrainPerlin_kwargs = dict(
+            zScale= [0.0, 0.07],    # [0, 0.07]: 低端为平地，高端为粗糙地形，混合训练
+            frequency= 10,
+        )
+
     class commands(LeggedRobotCfg.commands):
         curriculum = True
         max_curriculum = 2.0
@@ -66,8 +93,8 @@ class MybotV3RoughCfg(LeggedRobotCfg):
         heading_command = True
 
         class ranges(LeggedRobotCfg.commands.ranges):
-            lin_vel_x = [-1.0, 1.0]
-            lin_vel_y = [-1.0, 1.0]
+            lin_vel_x = [-0.2,0.2]
+            lin_vel_y = [-0.2, 0.2]
             ang_vel_yaw = [-3.14, 3.14]
             heading = [-3.14, 3.14]
 
@@ -85,34 +112,26 @@ class MybotV3RoughCfg(LeggedRobotCfg):
 
     class rewards(LeggedRobotCfg.rewards):
         class scales:
-            termination = -0.0
+            termination = -0.1     # 终止惩罚（倒下/出界）
             tracking_lin_vel = 2.0
             tracking_ang_vel = 0.5
             lin_vel_z = -2.0
-            # lin_vel_y = 0.0                       # 无对应 reward 函数，已由 tracking_lin_vel 覆盖
             ang_vel_xy = -0.05
             orientation = -0.2
             dof_acc = -2.5e-7
-            energy_substeps = -2e-5                 # 原 joint_power，替换为已有函数
+            energy_substeps = -2e-5
             base_height = -1.0
-            # foot_clearance = -0.02                # 无对应 reward 函数
             action_rate = -0.01
-            # smoothness = -0.01                    # 无对应 reward 函数
-            feet_air_time = 0.00
+            feet_air_time = 0.01     # 鼓励迈步步态（trot）
             collision = -0.0
-            # feet_stumble = -0.0                   # 应为 stumble，无 _reward_feet_stumble
             stand_still = -0.0
             torques = -0.0
             dof_vel = -0.0
             dof_pos_limits = -0.0
             dof_vel_limits = -0.0
             torque_limits = -0.0
-            # rear_thigh_pos = -0.2                 # 无对应 reward 函数
-            dof_error = -0.1 #dof_pos = -0.1  
+            dof_error = -0.1         # 适当减小，避免抑制正常行走时的关节运动
 
-        dof_pos_hip_weight = 4.0
-        dof_pos_thigh_weight = 2.0
-        dof_pos_calf_weight = 0.0
         only_positive_rewards = False
         tracking_sigma = 0.25
         soft_dof_pos_limit = 1.0
@@ -152,23 +171,17 @@ class MybotV3RoughCfg(LeggedRobotCfg):
 
 class MybotV3RoughCfgPPO(LeggedRobotCfgPPO):
     class policy(LeggedRobotCfgPPO.policy):
-
-        # 降低 exploration
         init_noise_std = 1.0
-
         actor_hidden_dims = [512, 256, 128]
         critic_hidden_dims = [512, 256, 128]
-
         activation = 'elu'
+        rnn_type = 'gru'            # ActorCriticRecurrent 需要
 
     class algorithm(LeggedRobotCfgPPO.algorithm):
         entropy_coef = 0.01
-        # learning_rate = 3e-4
-        # num_mini_batches = 4
-        
-        # # 关闭 adaptive PPO
-        # schedule = 'fixed'
+
     class runner(LeggedRobotCfgPPO.runner):
+        policy_class_name = "ActorCriticRecurrent"  # 与 field 训练保持一致，避免 hidden_states=None bug
         run_name = ""
         experiment_name = "rough_mybot_v3"
         num_steps_per_env = 100

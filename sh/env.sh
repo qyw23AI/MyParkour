@@ -3,7 +3,8 @@
 # 使用方式：source $(dirname "${BASH_SOURCE[0]}")/env.sh
 
 # conda 路径
-export PATH="/home/qyw/miniconda3/bin:${PATH}"
+# export PATH="/home/qyw/miniconda3/bin:${PATH}"
+export PATH="/home/ubuntu/miniconda3/bin:${PATH}"
 
 # 动态库搜索路径
 export LD_LIBRARY_PATH="/home/qyw/miniconda3/envs/parkour/lib:/home/qyw/miniconda3/lib:/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
@@ -20,7 +21,8 @@ export VGL_VSYNC=1
 
 # 激活 conda 环境
 if [[ "$1" != "--no-activate" ]]; then
-    source "/home/qyw/miniconda3/etc/profile.d/conda.sh" && conda activate parkour
+    # source "/home/qyw/miniconda3/etc/profile.d/conda.sh" && conda activate parkour
+     conda init && conda activate parkour
     export LD_LIBRARY_PATH=/home/qyw/miniconda3/envs/parkour/lib:$LD_LIBRARY_PATH
 fi
 

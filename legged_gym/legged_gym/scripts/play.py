@@ -93,12 +93,12 @@ def play(args):
         env_cfg.terrain.num_rows = 4
         env_cfg.terrain.num_cols = 8
         env_cfg.terrain.BarrierTrack_kwargs["options"] = [
-            "jump",
-            "leap",
+            "hurdle",
             "stairsup",
-            "tilt",
+            "bridge_a",
+            "bridge_b",
+            "t_stairs",
         ]
-        env_cfg.terrain.BarrierTrack_kwargs["leap"]["fake_offset"] = 0.1
         env_cfg.terrain.BarrierTrack_kwargs["draw_virtual_terrain"] = True
     else:
         env_cfg.env.num_envs = min(env_cfg.env.num_envs, 1)

@@ -6,6 +6,14 @@ from isaacgym import gymapi, gymutil
 from isaacgym.terrain_utils import convert_heightfield_to_trimesh
 from legged_gym.utils import trimesh
 from legged_gym.utils.terrain.perlin import TerrainPerlin
+from legged_gym.utils.terrain.bridge_mesh import (
+    create_bridge_a_mesh,
+    create_bridge_b_mesh,
+    create_bridge_mesh,
+    create_bridge_mesh_from_stl,
+    create_bridge_mesh_platform,
+    create_istairs_mesh,
+)
 from legged_gym.utils.console import colorize
 
 class BarrierTrack:
@@ -109,6 +117,34 @@ class BarrierTrack:
                 amplitude= 0.1, # [m] the amplitude of the wave
                 frequency= 1, # number of waves in the terrain
             ),
+            bridge_a= dict(
+                n_beams= 5,                # number of beams (auto-computed to fill X)
+                beam_width= 0.40,          # [m] width of each beam along x-axis
+                gap_width= 0.15,           # [m] width of gaps between beams along x-axis
+                bridge_height= 0.20,       # [m] height of beams above ground
+                bridge_length= 2.2,        # [m] (unused in rotate_90 mode)
+                bridge_mesh_source= "procedural",  # "procedural" | "platform" | "stl"
+                rotate_90= True,           # beams run across-track (Y)
+                ramp_length= 0.0,          # [m] approach ramp length (0=no ramps)
+            ),
+            bridge_b= dict(
+                n_beams= 3,                # number of beams (auto-computed to fill X)
+                beam_width= 0.20,          # [m] width of each beam along x-axis
+                gap_width= 0.10,           # [m] width of gaps between beams along x-axis
+                bridge_height= 0.25,       # [m] height of beams above ground
+                bridge_length= 1.5,        # [m] (unused in rotate_90 mode)
+                bridge_mesh_source= "procedural",  # "procedural" | "platform" | "stl"
+                rotate_90= True,           # beams run across-track (Y)
+                ramp_length= 0.0,          # [m] approach ramp length (0=no ramps)
+            ),
+            t_stairs= dict(
+                step_height= 0.10,         # [m] height of each step
+                step_depth= 0.20,          # [m] depth of each step along step direction
+                n_steps= 4,                # number of steps on EACH side (ascending + descending)
+                stair_width= 2.00,         # [m] I-stairs full-width (perpendicular to steps)
+                platform_width= 0.80,      # [m] depth of top platform
+                rotate_90= False,          # steps along X (track); True=steps along Y
+            ),
             # If True, will add perlin noise to each surface which will be step on. And please
             # provide self.cfg.TerrainPerlin_kwargs for generating Perlin noise
             add_perlin_noise= False,
@@ -140,6 +176,9 @@ class BarrierTrack:
         "slopeup": 12, # slopeup and slopedown are special cases of slope
         "slopedown": 13,
         "wave": 14,
+        "bridge_a": 15, # Bridge A: 5 beams × 15cm, 4 gaps × 40cm, 20cm high, 2.2m long
+        "t_stairs": 16, # T-shaped stairs with central platform
+        "bridge_b": 17, # Bridge B: 3 beams × 10cm, 2 gaps × 20cm, 25cm high, 1.5m long
      } # track_id are aranged in this order
     def __init__(self, cfg, num_robots: int) -> None:
         self.cfg = cfg
@@ -590,7 +629,486 @@ class BarrierTrack:
         ], dtype= torch.float32, device= self.device)
         height_offset_px = 0.
         return track_trimesh, track_heightfield, block_info, height_offset_px
-    
+
+    def _resolve_bridge_params(self, bridge_name, difficulty):
+        """Shared parameter resolution for bridge_a / bridge_b."""
+        kwargs = self.track_kwargs[bridge_name]
+        # Resolve n_beams
+        if isinstance(kwargs["n_beams"], (tuple, list)):
+            n_beams = np.random.randint(*kwargs["n_beams"])
+        else:
+            n_beams = kwargs["n_beams"]
+        # Resolve beam_width
+        if isinstance(kwargs["beam_width"], (tuple, list)):
+            if difficulty is None:
+                beam_width = np.random.uniform(*kwargs["beam_width"])
+            else:
+                beam_width = (1 - difficulty) * kwargs["beam_width"][1] + difficulty * kwargs["beam_width"][0]
+        else:
+            beam_width = kwargs["beam_width"]
+        # Resolve gap_width
+        if isinstance(kwargs["gap_width"], (tuple, list)):
+            if difficulty is None:
+                gap_width = np.random.uniform(*kwargs["gap_width"])
+            else:
+                gap_width = (1 - difficulty) * kwargs["gap_width"][0] + difficulty * kwargs["gap_width"][1]
+        else:
+            gap_width = kwargs["gap_width"]
+        # Resolve bridge_height
+        if isinstance(kwargs["bridge_height"], (tuple, list)):
+            if difficulty is None:
+                bridge_height = np.random.uniform(*kwargs["bridge_height"])
+            else:
+                bridge_height = (1 - difficulty) * kwargs["bridge_height"][0] + difficulty * kwargs["bridge_height"][1]
+        else:
+            bridge_height = kwargs["bridge_height"]
+        # Resolve bridge_length
+        bridge_length = kwargs.get("bridge_length", self.track_kwargs["track_block_length"] * 0.9)
+        if isinstance(bridge_length, (tuple, list)):
+            bridge_length = np.random.uniform(*bridge_length)
+        # Resolve ramp_length
+        ramp_length = kwargs.get("ramp_length", 0.0)
+        if isinstance(ramp_length, (tuple, list)):
+            if difficulty is None:
+                ramp_length = np.random.uniform(*ramp_length)
+            else:
+                ramp_length = (1 - difficulty) * ramp_length[0] + difficulty * ramp_length[1]
+
+        return n_beams, beam_width, gap_width, bridge_height, bridge_length, ramp_length
+
+    def _get_bridge_trimesh(self, bridge_name, n_beams, beam_width, gap_width,
+                             bridge_height, bridge_length, wall_thickness,
+                             ramp_length=0.0):
+        """Dispatch to the appropriate mesh generator based on bridge_mesh_source.
+
+        Supported sources:
+          - "procedural" (default): Individual beam boxes built up from ground
+          - "platform":             Single connected platform with empty gaps
+          - "stl":                  STL-file-based bridge surface
+        """
+        kwargs = self.track_kwargs[bridge_name]
+        source = kwargs.get("bridge_mesh_source", "procedural")
+        track_width = self.track_kwargs["track_width"]
+        track_block_length = self.track_kwargs["track_block_length"]
+
+        if source == "platform":
+            return create_bridge_mesh_platform(
+                track_width=track_width,
+                track_block_length=track_block_length,
+                wall_thickness=wall_thickness,
+                n_beams=n_beams,
+                beam_width=beam_width,
+                gap_width=gap_width,
+                bridge_height=bridge_height,
+                bridge_length=bridge_length,
+            )
+        elif source == "stl":
+            stl_path = kwargs.get("stl_path", None)
+            return create_bridge_mesh_from_stl(
+                track_width=track_width,
+                track_block_length=track_block_length,
+                wall_thickness=wall_thickness,
+                n_beams=n_beams,
+                beam_width=beam_width,
+                gap_width=gap_width,
+                bridge_height=bridge_height,
+                bridge_length=bridge_length,
+                stl_path=stl_path,
+                bridge_type=bridge_name,
+            )
+        else:  # "procedural" (default)
+            rotate_90 = kwargs.get("rotate_90", False)
+            return create_bridge_mesh(
+                track_width=track_width,
+                track_block_length=track_block_length,
+                wall_thickness=wall_thickness,
+                n_beams=n_beams,
+                beam_width=beam_width,
+                gap_width=gap_width,
+                bridge_height=bridge_height,
+                bridge_length=bridge_length,
+                rotate_90=rotate_90,
+                ramp_length=ramp_length,
+            )
+
+    def _build_bridge_heightfield(self, heightfield_template, heightfield_noise,
+                                   n_beams, beam_width, gap_width, bridge_height, bridge_length,
+                                   wall_thickness, virtual, ramp_length=0.0, rotate_90=False):
+        """Build heightfield representation of a bridge (for observation).
+
+        Ramps are anchored at the beam area edges so they connect tightly:
+        ascending ramp ends exactly at beam start, descending ramp starts at beam end.
+
+        This is separate from the physics mesh — the physics mesh uses proper 3D boxes.
+        """
+        height_px = int(bridge_height / self.cfg.vertical_scale)
+        beam_width_px = int(beam_width / self.cfg.horizontal_scale)
+        gap_width_px = int(gap_width / self.cfg.horizontal_scale)
+        wall_thickness_px = int(wall_thickness / self.cfg.horizontal_scale) + 1
+        ramp_px = int(ramp_length / self.cfg.horizontal_scale)
+
+        track_width_px = self.track_block_resolution[1]
+        track_length_px = self.track_block_resolution[0]
+
+        if heightfield_noise is not None:
+            track_heightfield = heightfield_template + heightfield_noise
+        else:
+            track_heightfield = heightfield_template.copy()
+
+        if rotate_90:
+            # Beams along Y (across track), full width, spaced along X.
+            n_beams_fit = int((track_length_px + gap_width_px) / (beam_width_px + gap_width_px))
+            if n_beams_fit < 1:
+                n_beams_fit = 1
+            total_pattern_x_px = n_beams_fit * beam_width_px + (n_beams_fit - 1) * gap_width_px
+            pattern_x_start = (track_length_px - total_pattern_x_px) // 2
+            beam_area_start_x_px = pattern_x_start
+            beam_area_end_x_px = pattern_x_start + total_pattern_x_px
+
+            # --- ascending ramp: anchored at beam_area_start_x_px ---
+            if ramp_px > 0:
+                asc_ramp_px = min(ramp_px, beam_area_start_x_px)
+                asc_start_x = beam_area_start_x_px - asc_ramp_px
+                for x in range(asc_ramp_px):
+                    h = int(height_px * (x + 1) / asc_ramp_px)
+                    xi = asc_start_x + x + 1
+                    if 0 <= xi < track_length_px:
+                        track_heightfield[
+                            xi,
+                            wall_thickness_px: track_width_px - wall_thickness_px,
+                        ] += h
+
+            # --- beams ---
+            for i in range(n_beams_fit):
+                x_start = pattern_x_start + i * (beam_width_px + gap_width_px)
+                x_end = x_start + beam_width_px
+                if x_end > track_length_px:
+                    break
+                if x_end <= x_start:
+                    continue
+                track_heightfield[
+                    x_start: x_end,
+                    wall_thickness_px: track_width_px - wall_thickness_px,
+                ] += height_px
+
+            # --- descending ramp: anchored at beam_area_end_x_px ---
+            if ramp_px > 0:
+                desc_ramp_px = min(ramp_px, track_length_px - beam_area_end_x_px)
+                for x in range(desc_ramp_px):
+                    h = int(height_px * (desc_ramp_px - x) / desc_ramp_px)
+                    xi = beam_area_end_x_px + x
+                    if 0 <= xi < track_length_px:
+                        track_heightfield[
+                            xi,
+                            wall_thickness_px: track_width_px - wall_thickness_px,
+                        ] += h
+        else:
+            # Beams along X (track direction), spaced along Y.
+            depth_px = int(bridge_length / self.cfg.horizontal_scale)
+            beam_x_start = (track_length_px - depth_px) // 2
+            beam_x_end = beam_x_start + depth_px
+
+            # --- ascending ramp: anchored at beam_x_start ---
+            if ramp_px > 0:
+                asc_ramp_px = min(ramp_px, beam_x_start)
+                asc_start_x = beam_x_start - asc_ramp_px
+                for x in range(asc_ramp_px):
+                    h = int(height_px * (x + 1) / asc_ramp_px)
+                    xi = asc_start_x + x + 1
+                    if 0 <= xi < track_length_px:
+                        track_heightfield[
+                            xi,
+                            wall_thickness_px: track_width_px - wall_thickness_px,
+                        ] += h
+
+            # --- beams ---
+            n_beams_fit = int((track_width_px + gap_width_px) / (beam_width_px + gap_width_px))
+            total_pattern_width_px = n_beams_fit * beam_width_px + (n_beams_fit - 1) * gap_width_px
+            track_mid_px = int(track_width_px / 2)
+            pattern_start_px = track_mid_px - int(total_pattern_width_px / 2)
+
+            if total_pattern_width_px > (track_width_px - 2 * wall_thickness_px):
+                scale = (track_width_px - 2 * wall_thickness_px) / total_pattern_width_px
+                beam_width_px = max(1, int(beam_width_px * scale))
+                gap_width_px = max(1, int(gap_width_px * scale))
+                total_pattern_width_px = n_beams_fit * beam_width_px + (n_beams_fit - 1) * gap_width_px
+                pattern_start_px = track_mid_px - int(total_pattern_width_px / 2)
+
+            for i in range(n_beams_fit):
+                y_start = pattern_start_px + i * (beam_width_px + gap_width_px)
+                y_end = y_start + beam_width_px
+                y_start = max(wall_thickness_px, y_start)
+                y_end = min(track_width_px - wall_thickness_px, y_end)
+                if y_end <= y_start:
+                    continue
+                track_heightfield[
+                    beam_x_start: beam_x_end,
+                    y_start: y_end,
+                ] += height_px
+
+            # --- descending ramp: anchored at beam_x_end ---
+            if ramp_px > 0:
+                desc_ramp_px = min(ramp_px, track_length_px - beam_x_end)
+                for x in range(desc_ramp_px):
+                    h = int(height_px * (desc_ramp_px - x) / desc_ramp_px)
+                    xi = beam_x_end + x
+                    if 0 <= xi < track_length_px:
+                        track_heightfield[
+                            xi,
+                            wall_thickness_px: track_width_px - wall_thickness_px,
+                        ] += h
+
+        return track_heightfield
+
+    def get_bridge_a_track(self,
+            wall_thickness,
+            trimesh_template,
+            heightfield_template,
+            difficulty= None,
+            heightfield_noise= None,
+            virtual= False,
+        ):
+        """ Bridge A: 5 beams × 15cm, 4 gaps × 40cm, 20cm high, 2.2m long.
+        Mesh source controlled by bridge_mesh_source kwarg:
+          - "procedural" (default): individual beam boxes
+          - "platform": single connected platform with empty gaps
+          - "stl": STL-file-based bridge surface
+        """
+        n_beams, beam_width, gap_width, bridge_height, bridge_length, ramp_length = \
+            self._resolve_bridge_params("bridge_a", difficulty)
+        rotate_90 = self.track_kwargs["bridge_a"].get("rotate_90", False)
+
+        # Build heightfield for observation
+        track_heightfield = self._build_bridge_heightfield(
+            heightfield_template, heightfield_noise,
+            n_beams, beam_width, gap_width, bridge_height, bridge_length,
+            wall_thickness, virtual, ramp_length=ramp_length,
+            rotate_90=rotate_90,
+        )
+
+        # Build triangle mesh via dispatch
+        track_trimesh = self._get_bridge_trimesh(
+            "bridge_a", n_beams, beam_width, gap_width,
+            bridge_height, bridge_length, wall_thickness,
+            ramp_length=ramp_length,
+        )
+
+        block_info = torch.tensor([
+            bridge_length,
+            bridge_height,
+        ], dtype= torch.float32, device= self.device)
+        height_offset_px = 0
+        return track_trimesh, track_heightfield, block_info, height_offset_px
+
+    def get_bridge_b_track(self,
+            wall_thickness,
+            trimesh_template,
+            heightfield_template,
+            difficulty= None,
+            heightfield_noise= None,
+            virtual= False,
+        ):
+        """ Bridge B: 3 beams × 10cm, 2 gaps × 20cm, 25cm high, 1.5m long.
+        Mesh source controlled by bridge_mesh_source kwarg:
+          - "procedural" (default): individual beam boxes
+          - "platform": single connected platform with empty gaps
+          - "stl": STL-file-based bridge surface
+        """
+        n_beams, beam_width, gap_width, bridge_height, bridge_length, ramp_length = \
+            self._resolve_bridge_params("bridge_b", difficulty)
+        rotate_90 = self.track_kwargs["bridge_b"].get("rotate_90", False)
+
+        # Build heightfield for observation
+        track_heightfield = self._build_bridge_heightfield(
+            heightfield_template, heightfield_noise,
+            n_beams, beam_width, gap_width, bridge_height, bridge_length,
+            wall_thickness, virtual, ramp_length=ramp_length,
+            rotate_90=rotate_90,
+        )
+
+        # Build triangle mesh via dispatch
+        track_trimesh = self._get_bridge_trimesh(
+            "bridge_b", n_beams, beam_width, gap_width,
+            bridge_height, bridge_length, wall_thickness,
+            ramp_length=ramp_length,
+        )
+
+        block_info = torch.tensor([
+            bridge_length,
+            bridge_height,
+        ], dtype= torch.float32, device= self.device)
+        height_offset_px = 0
+        return track_trimesh, track_heightfield, block_info, height_offset_px
+
+    def get_t_stairs_track(self,
+            wall_thickness,
+            trimesh_template,
+            heightfield_template,
+            difficulty= None,
+            heightfield_noise= None,
+            virtual= False,
+            terrain_kwargs= None,
+        ):
+        """ Complete I-shaped stairs: ascending stairs → platform → descending stairs.
+
+        Steps run along X (track direction) by default, or along Y when rotate_90=True.
+        The stairs go up from ground, hit a platform, then go back down to ground.
+        """
+        assert not virtual, "No virtual version of t_stairs terrain"
+        terrain_kwargs = self.track_kwargs["t_stairs"] if terrain_kwargs is None else terrain_kwargs
+        rotate_90 = terrain_kwargs.get("rotate_90", False)
+        # Resolve step_height
+        if isinstance(terrain_kwargs["step_height"], (tuple, list)):
+            if difficulty is None:
+                step_height = np.random.uniform(*terrain_kwargs["step_height"])
+            else:
+                step_height = (1-difficulty) * terrain_kwargs["step_height"][0] + difficulty * terrain_kwargs["step_height"][1]
+        else:
+            step_height = terrain_kwargs["step_height"]
+        # Resolve step_depth
+        if isinstance(terrain_kwargs["step_depth"], (tuple, list)):
+            if difficulty is None:
+                step_depth = np.random.uniform(*terrain_kwargs["step_depth"])
+            else:
+                step_depth = (1-difficulty) * terrain_kwargs["step_depth"][0] + difficulty * terrain_kwargs["step_depth"][1]
+        else:
+            step_depth = terrain_kwargs["step_depth"]
+        # Resolve n_steps
+        n_steps = terrain_kwargs["n_steps"]
+        if isinstance(n_steps, (tuple, list)):
+            if difficulty is None:
+                n_steps = np.random.randint(*n_steps)
+            else:
+                n_steps = int((1-difficulty) * n_steps[0] + difficulty * n_steps[1])
+        # Resolve stair_width — for I-stairs this is the FULL usable width
+        if isinstance(terrain_kwargs["stair_width"], (tuple, list)):
+            if difficulty is None:
+                stair_width = np.random.uniform(*terrain_kwargs["stair_width"])
+            else:
+                stair_width = (1-difficulty) * terrain_kwargs["stair_width"][1] + difficulty * terrain_kwargs["stair_width"][0]
+        else:
+            stair_width = terrain_kwargs["stair_width"]
+        platform_width = terrain_kwargs.get("platform_width", stair_width)
+
+        # Convert to pixel units
+        step_height_px = int(step_height / self.cfg.vertical_scale)
+        step_depth_px = int(step_depth / self.cfg.horizontal_scale)
+        wall_thickness_px = int(wall_thickness / self.cfg.horizontal_scale)
+
+        usable_w_px = self.track_block_resolution[1] - 2 * wall_thickness_px
+        usable_l_px = self.track_block_resolution[0] - 2
+
+        # Clamp stair width to usable space
+        actual_width_px = min(int(stair_width / self.cfg.horizontal_scale), usable_w_px)
+        plat_width_px = min(int(platform_width / self.cfg.horizontal_scale), usable_w_px)
+
+        # Clamp n_steps to fit: total = up-stairs + platform + down-stairs
+        max_steps = int((usable_l_px - plat_width_px) / (2 * step_depth_px)) if step_depth_px > 0 else int(n_steps)
+        if max_steps < 1:
+            max_steps = 1
+        n_steps = min(int(n_steps), max_steps)
+
+        # Build heightfield: ascending → platform → descending
+        if heightfield_noise is not None:
+            track_heightfield = heightfield_template + heightfield_noise
+        else:
+            track_heightfield = heightfield_template.copy()
+
+        total_height_px = step_height_px * n_steps
+
+        if rotate_90:
+            # Steps along Y (across-track), spanning X (track direction)
+            x_mid = int(self.track_block_resolution[0] / 2)
+            x_half = int(actual_width_px / 2)
+            x_start = max(1, x_mid - x_half)
+            x_end = min(self.track_block_resolution[0], x_mid + x_half)
+            plat_x_half = int(plat_width_px / 2)
+            plat_x_start = max(1, x_mid - plat_x_half)
+            plat_x_end = min(self.track_block_resolution[0], x_mid + plat_x_half)
+
+            # Ascending stairs
+            for i in range(n_steps):
+                y_start = step_depth_px * i + 1
+                y_end = step_depth_px * (i + 1) + 1
+                h = step_height_px * (i + 1)
+                track_heightfield[x_start: x_end, y_start: y_end] += h
+
+            # Platform
+            plat_y_start = step_depth_px * n_steps + 1
+            plat_y_end = plat_y_start + plat_width_px
+            if plat_y_start < self.track_block_resolution[1]:
+                track_heightfield[
+                    plat_x_start: plat_x_end,
+                    plat_y_start: min(plat_y_end, self.track_block_resolution[1]),
+                ] += total_height_px
+
+            # Descending stairs
+            for i in range(n_steps):
+                y_start = step_depth_px * n_steps + plat_width_px + step_depth_px * i + 1
+                y_end = y_start + step_depth_px
+                h = step_height_px * (n_steps - i)
+                track_heightfield[x_start: x_end, y_start: y_end] += h
+        else:
+            # Steps along X (track direction), spanning Y (across-track)
+            y_mid = int(self.track_block_resolution[1] / 2)
+            y_half = int(actual_width_px / 2)
+            y_start = max(wall_thickness_px, y_mid - y_half)
+            y_end = min(self.track_block_resolution[1] - wall_thickness_px, y_mid + y_half)
+            plat_y_half = int(plat_width_px / 2)
+            plat_y_start = max(wall_thickness_px, y_mid - plat_y_half)
+            plat_y_end = min(self.track_block_resolution[1] - wall_thickness_px, y_mid + plat_y_half)
+
+            # Ascending stairs
+            for i in range(n_steps):
+                x_start = step_depth_px * i + 1
+                x_end = step_depth_px * (i + 1) + 1
+                h = step_height_px * (i + 1)
+                track_heightfield[x_start: x_end, y_start: y_end] += h
+
+            # Platform
+            plat_x_start = step_depth_px * n_steps + 1
+            plat_x_end = plat_x_start + plat_width_px
+            if plat_x_start < self.track_block_resolution[0]:
+                track_heightfield[
+                    plat_x_start: min(plat_x_end, self.track_block_resolution[0]),
+                    plat_y_start: plat_y_end,
+                ] += total_height_px
+
+            # Descending stairs
+            for i in range(n_steps):
+                x_start = step_depth_px * n_steps + plat_width_px + step_depth_px * i + 1
+                x_end = x_start + step_depth_px
+                h = step_height_px * (n_steps - i)
+                track_heightfield[x_start: x_end, y_start: y_end] += h
+
+        # Generate procedural I-stairs trimesh
+        track_trimesh = create_istairs_mesh(
+            track_width=self.track_kwargs["track_width"],
+            track_block_length=self.track_kwargs["track_block_length"],
+            wall_thickness=wall_thickness,
+            step_height=step_height,
+            step_depth=step_depth,
+            n_steps=n_steps,
+            stair_width=stair_width,
+            platform_width=platform_width,
+            rotate_90=rotate_90,
+        )
+        if track_trimesh[0].shape[0] == 0:
+            # Fallback
+            track_trimesh = convert_heightfield_to_trimesh(
+                self.fill_heightfield_to_scale(track_heightfield),
+                self.cfg.horizontal_scale,
+                self.cfg.vertical_scale,
+                self.cfg.slope_treshold,
+            )
+
+        block_info = torch.tensor([
+            step_depth,
+            step_height,
+        ], dtype= torch.float32, device= self.device)
+        height_offset_px = 0  # starts and ends at ground level
+        return track_trimesh, track_heightfield, block_info, height_offset_px
+
     def get_down_track(self,
             wall_thickness,
             trimesh_template,
@@ -1164,6 +1682,16 @@ class BarrierTrack:
                 self.cfg.vertical_scale,
                 self.cfg.slope_treshold,
             )
+            # --- ground fill under elevated starting block ---
+            if block_starting_height_px > 0:
+                fill_h = block_starting_height_px * self.cfg.vertical_scale
+                fill_size = np.array([self.track_kwargs["track_block_length"],
+                                      self.track_kwargs["track_width"], fill_h])
+                fill_center = np.array([self.track_kwargs["track_block_length"] / 2.,
+                                        self.track_kwargs["track_width"] / 2.,
+                                        -fill_h / 2.])
+                fill_trimesh = trimesh.box_trimesh(fill_size, fill_center)
+                starting_trimesh_noised = trimesh.combine_trimeshes(starting_trimesh_noised, fill_trimesh)
             self.add_trimesh_to_sim(starting_trimesh_noised,
                 np.array([
                     track_origin_px[0] * self.cfg.horizontal_scale,
@@ -1171,6 +1699,16 @@ class BarrierTrack:
                     block_starting_height_px * self.cfg.vertical_scale,
                 ]))
         else:
+            # --- ground fill under elevated starting block ---
+            if block_starting_height_px > 0:
+                fill_h = block_starting_height_px * self.cfg.vertical_scale
+                fill_size = np.array([self.track_kwargs["track_block_length"],
+                                      self.track_kwargs["track_width"], fill_h])
+                fill_center = np.array([self.track_kwargs["track_block_length"] / 2.,
+                                        self.track_kwargs["track_width"] / 2.,
+                                        -fill_h / 2.])
+                fill_trimesh = trimesh.box_trimesh(fill_size, fill_center)
+                starting_trimesh = trimesh.combine_trimeshes(starting_trimesh, fill_trimesh)
             self.add_trimesh_to_sim(starting_trimesh,
                 np.array([
                     track_origin_px[0] * self.cfg.horizontal_scale,
@@ -1215,6 +1753,16 @@ class BarrierTrack:
                 heightfield_x0: heightfield_x1,
                 heightfield_y0: heightfield_y1,
             ] = track_heightfield + block_starting_height_px
+            # --- ground fill under elevated obstacle block ---
+            if block_starting_height_px > 0:
+                fill_h = block_starting_height_px * self.cfg.vertical_scale
+                fill_size = np.array([self.track_kwargs["track_block_length"],
+                                      self.track_kwargs["track_width"], fill_h])
+                fill_center = np.array([self.track_kwargs["track_block_length"] / 2.,
+                                        self.track_kwargs["track_width"] / 2.,
+                                        -fill_h / 2.])
+                fill_trimesh = trimesh.box_trimesh(fill_size, fill_center)
+                track_trimesh = trimesh.combine_trimeshes(track_trimesh, fill_trimesh)
             self.add_trimesh_to_sim(
                 track_trimesh,
                 np.array([
@@ -1720,6 +2268,32 @@ class BarrierTrack:
         ):
         return torch.zeros_like(positions_in_block[:, 0])
 
+    def get_bridge_a_penetration_depths(self,
+            block_infos,
+            positions_in_block,
+            mask_only= False,
+        ):
+        """Penetration for Bridge A: volume points in gaps are penetrating."""
+        return torch.zeros_like(positions_in_block[:, 0])
+
+    def get_bridge_b_penetration_depths(self,
+            block_infos,
+            positions_in_block,
+            mask_only= False,
+        ):
+        """Penetration for Bridge B: volume points in gaps are penetrating."""
+        return torch.zeros_like(positions_in_block[:, 0])
+
+    def get_t_stairs_penetration_depths(self,
+            block_infos,
+            positions_in_block,
+            mask_only= False,
+        ):
+        """ Penetration for T-stairs: volume points inside step volumes are safe,
+        outside are penetrating. For initial implementation, returns zeros.
+        """
+        return torch.zeros_like(positions_in_block[:, 0])
+
     def get_penetration_depths(self, sample_points, mask_only= False):
         """ Compute the penetrations of the sample points w.r.t the virtual obstacle.
         NOTE: this implementation is specifically tailored to these 3 obstacles.
@@ -2077,6 +2651,80 @@ class BarrierTrack:
         ):
         # No virtual terrain for wave
         pass
+
+    def _draw_virtual_bridge(self, block_info, block_origin, bridge_name, color):
+        """Shared wireframe drawing for bridge_a / bridge_b."""
+        bridge_length = block_info[1].cpu().numpy() if hasattr(block_info[1], 'cpu') else block_info[1]
+        bridge_height = block_info[2].cpu().numpy() if hasattr(block_info[2], 'cpu') else block_info[2]
+        bridge_kwargs = self.track_kwargs[bridge_name]
+        n_beams = bridge_kwargs["n_beams"]
+        if isinstance(n_beams, (tuple, list)):
+            n_beams = n_beams[0]
+        beam_width = bridge_kwargs["beam_width"]
+        if isinstance(beam_width, (tuple, list)):
+            beam_width = beam_width[0]
+        gap_width = bridge_kwargs["gap_width"]
+        if isinstance(gap_width, (tuple, list)):
+            gap_width = gap_width[0]
+
+        total_pattern_width = n_beams * beam_width + (n_beams - 1) * gap_width
+        pattern_start_y = block_origin[1] + (self.track_kwargs["track_width"] - total_pattern_width) / 2
+
+        for i in range(int(n_beams)):
+            y_center = pattern_start_y + i * (beam_width + gap_width) + beam_width / 2
+            geom = gymutil.WireframeBoxGeometry(
+                bridge_length,
+                beam_width,
+                bridge_height,
+                pose=None,
+                color=color,
+            )
+            pose = gymapi.Transform(gymapi.Vec3(
+                bridge_length / 2 + block_origin[0],
+                y_center,
+                bridge_height / 2 + block_origin[2],
+            ), r=None)
+            gymutil.draw_lines(geom, self.gym, self.viewer, None, pose)
+
+    def draw_virtual_bridge_a_track(self, block_info, block_origin):
+        """Draw wireframe boxes for Bridge A beams (blue)."""
+        self._draw_virtual_bridge(block_info, block_origin, "bridge_a", color=(0, 0, 1))
+
+    def draw_virtual_bridge_b_track(self, block_info, block_origin):
+        """Draw wireframe boxes for Bridge B beams (green)."""
+        self._draw_virtual_bridge(block_info, block_origin, "bridge_b", color=(0, 1, 0))
+
+    def draw_virtual_t_stairs_track(self,
+            block_info,
+            block_origin,
+        ):
+        """ Draw wireframe boxes for each step of the T-stairs """
+        step_depth = block_info[1]
+        step_height = block_info[2]
+        t_stairs_kwargs = self.track_kwargs["t_stairs"]
+        n_steps = t_stairs_kwargs["n_steps"]
+        if isinstance(n_steps, (tuple, list)):
+            n_steps = n_steps[0]
+        stair_width = t_stairs_kwargs["stair_width"]
+        if isinstance(stair_width, (tuple, list)):
+            stair_width = stair_width[0]
+
+        for i in range(int(n_steps)):
+            x_center = step_depth * i + step_depth / 2 + block_origin[0]
+            step_h = step_height * (i + 1)
+            geom = gymutil.WireframeBoxGeometry(
+                step_depth,
+                stair_width,
+                step_h,
+                pose=None,
+                color=(1, 0, 0),
+            )
+            pose = gymapi.Transform(gymapi.Vec3(
+                x_center,
+                block_origin[1],
+                step_h / 2 + block_origin[2],
+            ), r=None)
+            gymutil.draw_lines(geom, self.gym, self.viewer, None, pose)
 
     def draw_virtual_track(self,
             row_idx,

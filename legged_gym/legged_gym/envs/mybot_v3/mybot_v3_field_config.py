@@ -33,37 +33,52 @@ class MybotV3FieldCfg( MybotV3RoughCfg ):
 
         BarrierTrack_kwargs = dict(
             options= [
-                "jump",
-                "leap",
+                "hurdle",
                 "stairsup",
-                "tilt",
+                "bridge_a",
+                "bridge_b",
+                "t_stairs",
             ],
-            n_obstacles_per_track= 2,
+            n_obstacles_per_track= 4,
             randomize_obstacle_order= True,
             track_width= 2.4,
             track_block_length= 2.4,
             wall_thickness= (0.04, 0.2),
-            wall_height= -0.05,
-            jump= dict(
-                height= (0.15, 0.3),
-                depth= (0.05, 0.1),
-                fake_offset= 0.0,
-            ),
-            leap= dict(
-                length= (0.1, 0.3),
-                depth= (0.2, 0.4),
-                height= 0.1,
+            wall_height= 0.3,
+            hurdle= dict(
+                height= (0.15, 0.35),
+                depth= (0.05, 0.08),
             ),
             stairsup= dict(
-                height= (0.06, 0.1),
-                depth= (0.15, 0.25),
-                n_stairs= 3,
+                height= (0.08, 0.15),
+                depth= (0.10, 0.30),
+                n_stairs= 2,
             ),
-            tilt= dict(
-                width= (0.2, 0.4),
-                depth= (0.8, 1.2),
-                opening_angle= 0.0,
-                wall_height= 0.5,
+            bridge_a= dict(
+                n_beams= 5,
+                beam_width= 0.40,           # 40cm (along X)
+                gap_width= 0.15,            # 15cm (along X)
+                bridge_height= 0.15,        # 15cm
+                bridge_mesh_source= "procedural",
+                rotate_90= True,
+                ramp_length= 0.40,          # [m] approach ramp length
+            ),
+            bridge_b= dict(
+                n_beams= 3,
+                beam_width= 0.20,           # 20cm (along X)
+                gap_width= 0.10,            # 10cm (along X)
+                bridge_height= 0.20,        # 20cm
+                bridge_mesh_source= "procedural",
+                rotate_90= False,
+                ramp_length= 0.40,          # [m] approach ramp length
+            ),
+            t_stairs= dict(
+                step_height= 0.10,
+                step_depth= 0.18,
+                n_steps= 4,
+                stair_width= 2.00,          # I-stairs: full track width
+                platform_width= 0.80,
+                rotate_90= False,
             ),
             add_perlin_noise= True,
             border_perlin_noise= True,
@@ -77,7 +92,7 @@ class MybotV3FieldCfg( MybotV3RoughCfg ):
         )
 
         TerrainPerlin_kwargs = dict(
-            zScale= [0.08, 0.15],
+            zScale= [0.0, 0.03],
             frequency= 10,
         )
 

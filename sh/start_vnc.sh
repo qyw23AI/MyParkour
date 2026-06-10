@@ -9,21 +9,17 @@ export MUJOCO_GL=egl
 # 检查 VNC 密码是否已设置
 if [[ ! -f "${HOME}/.vnc/passwd" ]]; then
     echo "首次使用 VNC，请设置密码（至少6位）:"
-    # TurboVNC 3.3 使用 vncserver 首次启动时自动提示设置密码
-    vncserver :1 -kill :1 2>/dev/null || true
-    vncserver :1 -geometry 1920x1080 -depth 24
-    vncserver -kill :1
-    echo "密码已设置"
+    vncpasswd
 fi
 
-# if ! pgrep -f "Xvfb :1" > /dev/null; then
-#     echo "启动 Xvfb :1..."
-#     Xvfb :1 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
-#     sleep 2
-# fi
+if ! pgrep -f "Xvfb :1" > /dev/null; then
+    echo "启动 Xvfb :1..."
+    Xvfb :1 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset &
+    sleep 2
+fi
 
 echo "启动 TurboVNC server..."
-vncserver :1 -geometry 1920x1080 -depth 24
+vncserver :1 -geometry 1920x1080 -depth 24 -vsys 0
 
 echo ""
 echo "VNC 服务已启动"

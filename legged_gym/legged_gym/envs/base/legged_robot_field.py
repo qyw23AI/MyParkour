@@ -575,7 +575,9 @@ class LeggedRobotFieldMixin:
             self.root_states[:, :3],
             self.volume_sample_points - self.root_states[:, :3].unsqueeze(-2), # (n_envs, n_points, 3)
         )
-        engaging_mask = (engaging_obstacle_types == self.terrain.track_options_id_dict["jump"])
+        engaging_hurdle_mask = (engaging_obstacle_types == self.terrain.track_options_id_dict.get("hurdle", 5))
+        engaging_jump_mask = (engaging_obstacle_types == self.terrain.track_options_id_dict.get("jump", 3))
+        engaging_mask = engaging_hurdle_mask | engaging_jump_mask
         roll, pitch, yaw = get_euler_xyz(self.root_states[:, 3:7])
         pi = torch.acos(torch.zeros(1)).item() * 2 # which is 3.1415927410125732
         pitch[pitch > pi] -= pi * 2 # to range (-pi, pi)
@@ -593,7 +595,9 @@ class LeggedRobotFieldMixin:
             self.root_states[:, :3],
             self.volume_sample_points - self.root_states[:, :3].unsqueeze(-2), # (n_envs, n_points, 3)
         )
-        engaging_mask = (engaging_obstacle_types == self.terrain.track_options_id_dict["jump"])
+        engaging_hurdle_mask = (engaging_obstacle_types == self.terrain.track_options_id_dict.get("hurdle", 5))
+        engaging_jump_mask = (engaging_obstacle_types == self.terrain.track_options_id_dict.get("jump", 3))
+        engaging_mask = engaging_hurdle_mask | engaging_jump_mask
         rr_legs = torch.clone(self.actions[:, 6:9]) # shoulder, thigh, calf
         rl_legs = torch.clone(self.actions[:, 9:12]) # shoulder, thigh, calf
         rl_legs[:, 0] *= -1 # flip the sign of shoulder action
@@ -608,7 +612,9 @@ class LeggedRobotFieldMixin:
             self.root_states[:, :3],
             self.volume_sample_points - self.root_states[:, :3].unsqueeze(-2), # (n_envs, n_points, 3)
         )
-        engaging_mask = (engaging_obstacle_types == self.terrain.track_options_id_dict["jump"])
+        engaging_hurdle_mask = (engaging_obstacle_types == self.terrain.track_options_id_dict.get("hurdle", 5))
+        engaging_jump_mask = (engaging_obstacle_types == self.terrain.track_options_id_dict.get("jump", 3))
+        engaging_mask = engaging_hurdle_mask | engaging_jump_mask
         right_legs = torch.clone(torch.cat([
             self.actions[:, 0:3],
             self.actions[:, 6:9],
